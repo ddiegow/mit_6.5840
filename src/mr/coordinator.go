@@ -1,8 +1,6 @@
-// TODO: USE ORIGINAL FILE NAMES, DON'T COPY TO MR-IN-X FILES, TO PASS TESTS
 package mr
 
 import (
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -28,6 +26,7 @@ type Coordinator struct {
 	jobs        map[int]int
 	nMapDone    int
 	nReduceDone int
+	jobToFiles  map[int]string
 }
 
 type FileLock struct {
@@ -39,6 +38,7 @@ type FileLock struct {
 func (c *Coordinator) GetJob(args *GetJobArgs, reply *GetJobReply) error {
 	reply.NReduce = c.nReduce
 	reply.NFiles = c.nFiles
+	reply.JobToFile = c.jobToFiles
 	pendingMapJob := getPendingMapJob(c)
 	if pendingMapJob != -1 { // if there are still pending map jobs
 		reply.Jobtype = "map"                   // set job type
@@ -149,8 +149,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.jobs = make(map[int]int)
 	c.nMapDone = 0
 	c.nReduceDone = 0
-	// atomize input files in the form in-X with X going from 0 to len(files) - 1
-	atomizeFiles(files)
+	c.jobToFiles = make(map[int]string)
+	// map job to file for mapping
+	for index, filename := range files {
+		c.jobToFiles[index] = filename
+
+	}
 	// create the mapping jobs
 	createMappingJobs(&c)
 	c.server()
@@ -160,24 +164,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 func checkFatalError(err error) {
 	if err != nil {
 		log.Fatal(err.Error())
-	}
-}
-
-func atomizeFiles(files []string) {
-	for index, filename := range files {
-		func() { // use anonymous function to be able to defer stuff
-			srcFile, err := os.Open(filename)                          // open the source file name
-			checkFatalError(err)                                       // check for errors
-			defer srcFile.Close()                                      // defer closing the file
-			destFile, err := os.Create("mr-in-" + strconv.Itoa(index)) // create the destination file name
-			checkFatalError(err)                                       // check for errors
-			defer destFile.Close()                                     // defer closing the file
-			_, err = io.Copy(destFile, srcFile)                        // copy the file
-			checkFatalError(err)                                       // check for errors
-			err = destFile.Sync()                                      // commit the file to storage
-			checkFatalError(err)                                       // check fo errors
-		}()
-
 	}
 }
 

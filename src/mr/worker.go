@@ -42,7 +42,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	for {
 		// Your worker implementation here.
-		jobType, nJob, nReduce, nFiles := CallGetJob()
+		jobType, nJob, nReduce, nFiles, jobToFiles := CallGetJob()
 		if jobType == "wait" { // if we have been asked to wait
 			time.Sleep(time.Second * 5) // wait for five seconds
 			continue                    // get another job
@@ -50,13 +50,13 @@ func Worker(mapf func(string, string) []KeyValue,
 		// MAPPING JOB
 		if jobType == "map" { // if we need to do a map job
 			//fmt.Printf("Received map job %d\n", nJob)
-			filename := "mr-in-" + strconv.Itoa(nJob) // get the file name
-			file, err := os.Open(filename)            // open the file (no need to lock as we're only reading from it)
-			checkFatalError(err)                      // check for fatal error
-			content, err := ioutil.ReadAll(file)      // read file content
-			checkFatalError(err)                      // check for fatal error
-			file.Close()                              // close the file
-			kva := mapf(filename, string(content))    // get the key-value array
+			filename := jobToFiles[nJob]
+			file, err := os.Open(filename)         // open the file (no need to lock as we're only reading from it)
+			checkFatalError(err)                   // check for fatal error
+			content, err := ioutil.ReadAll(file)   // read file content
+			checkFatalError(err)                   // check for fatal error
+			file.Close()                           // close the file
+			kva := mapf(filename, string(content)) // get the key-value array
 
 			var files []*os.File           // bucket files
 			for i := 0; i < nReduce; i++ { // create nReduce bucket files
@@ -138,7 +138,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func CallGetJob() (string, int, int, int) {
+func CallGetJob() (string, int, int, int, map[int]string) {
 	args := GetJobArgs{}
 	reply := GetJobReply{}
 
@@ -146,7 +146,7 @@ func CallGetJob() (string, int, int, int) {
 	if !ok {
 		fmt.Printf("call failed!\n")
 	}
-	return reply.Jobtype, reply.NJob, reply.NReduce, reply.NFiles
+	return reply.Jobtype, reply.NJob, reply.NReduce, reply.NFiles, reply.JobToFile
 }
 
 func CallSendResult(jobType string, nJob int) bool {

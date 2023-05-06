@@ -28,10 +28,11 @@ type ExampleReply struct {
 type GetJobArgs struct {
 }
 type GetJobReply struct {
-	Jobtype string
-	NReduce int
-	NJob    int
-	NFiles  int
+	Jobtype   string
+	NReduce   int
+	NJob      int
+	NFiles    int
+	JobToFile map[int]string
 }
 type SendResultArgs struct {
 	Jobtype string
