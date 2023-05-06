@@ -1,16 +1,27 @@
 package mr
 
 import (
+	"bufio"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -31,26 +42,25 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	for {
 		// Your worker implementation here.
-		jobType, nJob, nReduce := CallGetJob()
+		jobType, nJob, nReduce, nFiles := CallGetJob()
 		if jobType == "wait" { // if we have been asked to wait
 			time.Sleep(time.Second * 5) // wait for five seconds
 			continue                    // get another job
 		}
+		// MAPPING JOB
 		if jobType == "map" { // if we need to do a map job
-			fmt.Printf("Received map job %d\n", nJob)
-			filename := "in-" + strconv.Itoa(nJob) // get the file name
-			file, err := os.Open(filename)         // open the file (no need to lock as we're only reading from it)
-			checkFatalError(err)                   // check for fatal error
-			content, err := ioutil.ReadAll(file)   // read file content
-			checkFatalError(err)                   // check for fatal error
-			file.Close()                           // close the file
-			kva := mapf(filename, string(content)) // get the key-value array
+			//fmt.Printf("Received map job %d\n", nJob)
+			filename := "mr-in-" + strconv.Itoa(nJob) // get the file name
+			file, err := os.Open(filename)            // open the file (no need to lock as we're only reading from it)
+			checkFatalError(err)                      // check for fatal error
+			content, err := ioutil.ReadAll(file)      // read file content
+			checkFatalError(err)                      // check for fatal error
+			file.Close()                              // close the file
+			kva := mapf(filename, string(content))    // get the key-value array
 
-			// next we need to create the bucket files (locking them)
-
-			var files []*os.File
-			for i := 0; i < nReduce; i++ {
-				filename := "out-" + strconv.Itoa(nJob) + "-" + strconv.Itoa(i)
+			var files []*os.File           // bucket files
+			for i := 0; i < nReduce; i++ { // create nReduce bucket files
+				filename := "mr-out-" + strconv.Itoa(nJob) + "-" + strconv.Itoa(i)
 				newFile, err := os.Create(filename)                     // create new bucket file
 				checkFatalError(err)                                    // check for fatal error
 				defer newFile.Close()                                   // defer closing the file
@@ -67,6 +77,60 @@ func Worker(mapf func(string, string) []KeyValue,
 			CallSendResult(jobType, nJob) // let the coordinator we're done with the job
 			continue                      // get another job
 		}
+		// REDUCE JOB
+		if jobType == "reduce" {
+			//fmt.Printf("Received reduce job %d\n", nJob)
+			baseFilename := "mr-out-"
+			var filenames []string
+			for i := 0; i < nFiles; i++ {
+				filenames = append(filenames, baseFilename+strconv.Itoa(i)+"-"+strconv.Itoa(nJob))
+			}
+			var kva []KeyValue
+			for _, filename := range filenames {
+				file, err := os.Open(filename)
+				checkFatalError(err)
+				fileScanner := bufio.NewScanner(file)
+
+				fileScanner.Split(bufio.ScanLines)
+
+				for fileScanner.Scan() {
+					line := fileScanner.Text()
+					kv := strings.Split(line, " ")
+					kva = append(kva, KeyValue{kv[0], kv[1]})
+				}
+				file.Close()
+			}
+			sort.Sort(ByKey(kva))
+
+			oname := "mr-out-" + strconv.Itoa(nJob) + ".temp"
+			ofile, _ := os.Create(oname)
+			err := syscall.Flock(int(ofile.Fd()), syscall.LOCK_EX) // try to lock the file
+			checkFatalError(err)                                   // check for fatal error
+			//
+			// call Reduce on each distinct key in intermediate[],
+			// and print the result to mr-out-0.
+			//
+			i := 0
+			for i < len(kva) {
+				j := i + 1
+				for j < len(kva) && kva[j].Key == kva[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, kva[k].Value)
+				}
+				output := reducef(kva[i].Key, values)
+
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+				i = j
+			}
+			syscall.Flock(int(ofile.Fd()), syscall.LOCK_UN) // unlock the file
+			ofile.Close()                                   // close the file
+			CallSendResult(jobType, nJob)
+		}
 	}
 
 	// uncomment to send the Example RPC to the coordinator.
@@ -74,7 +138,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func CallGetJob() (string, int, int) {
+func CallGetJob() (string, int, int, int) {
 	args := GetJobArgs{}
 	reply := GetJobReply{}
 
@@ -82,7 +146,7 @@ func CallGetJob() (string, int, int) {
 	if !ok {
 		fmt.Printf("call failed!\n")
 	}
-	return reply.Jobtype, reply.NJob, reply.NReduce
+	return reply.Jobtype, reply.NJob, reply.NReduce, reply.NFiles
 }
 
 func CallSendResult(jobType string, nJob int) bool {

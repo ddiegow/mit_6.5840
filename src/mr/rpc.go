@@ -31,6 +31,7 @@ type GetJobReply struct {
 	Jobtype string
 	NReduce int
 	NJob    int
+	NFiles  int
 }
 type SendResultArgs struct {
 	Jobtype string
