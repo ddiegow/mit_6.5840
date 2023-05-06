@@ -71,7 +71,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 
 			for _, kv := range kva {
-				nBucket := ihash(kv.Key) % nReduce                         // get bucket number
+				nBucket := ihash(kv.Key) % nReduce                         // get the bucket number
 				files[nBucket].WriteString(kv.Key + " " + kv.Value + "\n") // write into appropriate bucket file
 			}
 			CallSendResult(jobType, nJob) // let the coordinator we're done with the job

@@ -1,4 +1,4 @@
-// TODO: NOT PROCESSING ALL INTERMEDIATE BUCKETS
+// TODO: USE ORIGINAL FILE NAMES, DON'T COPY TO MR-IN-X FILES, TO PASS TESTS
 package mr
 
 import (
@@ -57,6 +57,10 @@ func (c *Coordinator) GetJob(args *GetJobArgs, reply *GetJobReply) error {
 		reply.NJob = 0         // anything is ok here
 		return nil             // return no error
 	}
+	if c.nMapDone == c.nFiles {
+		createReduceJobs(c)
+		c.nMapDone++
+	}
 	pendingReduceJob := getPendingReduceJob(c)
 	if pendingReduceJob != -1 { // if there are still pending reduce jobs
 		reply.Jobtype = "reduce"                      // set job type
@@ -82,7 +86,7 @@ func (c *Coordinator) GetJob(args *GetJobArgs, reply *GetJobReply) error {
 func (c *Coordinator) SendResult(args *SendResultArgs, reply *SendResultReply) error {
 	if args.Jobtype == "map" {
 		c.nMapDone++
-		c.jobs[args.NJob] = REDUCE_PENDING
+		delete(c.jobs, args.NJob)
 	}
 	if args.Jobtype == "reduce" {
 		if c.jobs[args.NJob] != REDUCE_DONE { // if the job is not done yet
@@ -122,7 +126,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	if c.nReduceDone == c.nFiles {
+	if c.nReduceDone == c.nReduce {
 		time.Sleep(time.Second * 5)
 		for i := 0; i < c.nFiles; i++ {
 			os.Remove("mr-in-" + strconv.Itoa(i))
@@ -130,8 +134,9 @@ func (c *Coordinator) Done() bool {
 				os.Remove("mr-out-" + strconv.Itoa(i) + "-" + strconv.Itoa(j))
 			}
 		}
+		return true
 	}
-	return c.nReduceDone == c.nFiles
+	return false
 }
 
 // create a Coordinator.
@@ -182,6 +187,11 @@ func createMappingJobs(c *Coordinator) {
 	}
 }
 
+func createReduceJobs(c *Coordinator) {
+	for i := 0; i < c.nReduce; i++ {
+		c.jobs[i] = REDUCE_PENDING
+	}
+}
 func getPendingMapJob(c *Coordinator) int {
 	for k, v := range c.jobs {
 		if v == MAP_PENDING {
