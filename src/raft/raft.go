@@ -19,7 +19,10 @@ package raft
 
 import (
 	//	"bytes"
+
+	"fmt"
 	"math/rand"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,6 +79,7 @@ type Raft struct {
 	lastApplied int
 	state       int
 	leaderUp    bool // is the leader still up?
+	lastLogTerm int
 	// volatile on leaders
 	nextIndex  []int
 	matchIndex []int
@@ -144,28 +148,35 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	term         int // candidate's term
-	candidateId  int // candidate requesting vote
-	lastLogIndex int // index of candidate's last log entry
-	lastLogTerm  int // term of candidate's last log entry
+	Term         int // candidate's term
+	CandidateId  int // candidate requesting vote
+	LastLogIndex int // index of candidate's last log entry
+	LastLogTerm  int // term of candidate's last log entry
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
-	term        int  // currentTerm, for candidate to update itself
-	voteGranted bool // true means candidate received the vote
+	Term        int  // currentTerm, for candidate to update itself
+	VoteGranted bool // true means candidate received the vote
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	reply.term = rf.currentTerm
-	if args.term < rf.currentTerm {
-		reply.voteGranted = false
-	} else if rf.votedFor == -1 && args.lastLogTerm >= rf.currentTerm && args.lastLogIndex >= rf.commitIndex {
-		reply.voteGranted = true
+	reply.Term = rf.currentTerm
+	//fmt.Println("args: LastLogTerm - LastLogIndex")
+	//fmt.Println(strconv.Itoa(args.LastLogTerm) + " - " + strconv.Itoa(args.LastLogIndex))
+	//fmt.Println("rf: votedFor - currentTerm - commitIndex")
+	//fmt.Println(strconv.Itoa(rf.me) + " - " +
+	//strconv.Itoa(rf.votedFor) + " - " + strconv.Itoa(rf.currentTerm) + " - " + strconv.Itoa(rf.commitIndex))
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
+	} else if rf.votedFor == -1 && args.LastLogTerm >= rf.currentTerm && args.LastLogIndex >= rf.commitIndex {
+		fmt.Println("Granting vote to " + strconv.Itoa(args.CandidateId))
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
 	}
 }
 
@@ -247,10 +258,38 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		votes := 0
 		if !rf.leaderUp { // leader isn't up, we need to start an election
+			rf.currentTerm++
+			votes++ // vote for myself
 			for i := 0; i < len(rf.peers); i++ {
+				args := RequestVoteArgs{
+					Term:         rf.currentTerm,
+					CandidateId:  rf.me,
+					LastLogIndex: rf.lastApplied,
+					LastLogTerm:  rf.lastLogTerm,
+				}
+				reply := RequestVoteReply{}
 
+				rf.sendRequestVote(i, &args, &reply)
+				if reply.Term > rf.currentTerm { // somebody else is the leader
+					rf.state = STATE_FOLLOWER
+					return
+				}
+				if reply.VoteGranted {
+					votes++
+				}
 			}
+			//fmt.Println("Votes: " + strconv.Itoa(votes))
+			if votes > len(rf.peers)/2 {
+				fmt.Println("I'm the leader!")
+				rf.state = STATE_LEADER
+				return
+
+			} else {
+				rf.currentTerm--
+			}
+
 		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
@@ -282,8 +321,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = make([]string, 0) // empty log
 	rf.commitIndex = 0         // we start at commit index 0
 	rf.lastApplied = 0         // we start at last applied 0
-	rf.nextIndex = nil         // we are a follower so no next index
-	rf.matchIndex = nil        // we are a follower wso no match index
+	rf.lastLogTerm = 0
+	rf.nextIndex = nil  // we are a follower so no next index
+	rf.matchIndex = nil // we are a follower wso no match index
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
