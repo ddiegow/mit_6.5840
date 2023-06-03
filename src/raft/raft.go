@@ -75,6 +75,7 @@ type Raft struct {
 	commitIndex int
 	lastApplied int
 	state       int
+	leaderUp    bool // is the leader still up?
 	// volatile on leaders
 	nextIndex  []int
 	matchIndex []int
@@ -160,11 +161,11 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	reply.term = rf.currentTerm
 	if args.term < rf.currentTerm {
-		reply.term = rf.currentTerm
 		reply.voteGranted = false
-	} else if rf.votedFor == -1 {
-		// todo (need to create a func to check if a log is up-to-date when compared to another)
+	} else if rf.votedFor == -1 && args.lastLogTerm >= rf.currentTerm && args.lastLogIndex >= rf.commitIndex {
+		reply.voteGranted = true
 	}
 }
 
@@ -246,7 +247,11 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		if !rf.leaderUp { // leader isn't up, we need to start an election
+			for i := 0; i < len(rf.peers); i++ {
 
+			}
+		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
