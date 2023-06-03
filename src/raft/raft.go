@@ -28,6 +28,11 @@ import (
 	"6.5840/labrpc"
 )
 
+const {
+	STATE_FOLLOWER = iota
+	STATE_CANDIDATE
+	STATE_LEADER
+}
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -62,6 +67,16 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// persistent on all servers
+	currentTerm int
+	votedFor int
+	log[] string
+	// volatile on all servers
+	commitIndex int
+	lastApplied int
+	// volatile on leaders
+	nextIndex[] int
+	matchIndex[] int
 }
 
 // return currentTerm and whether this server
@@ -71,6 +86,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = rf.state == STATE_LEADER
 	return term, isleader
 }
 
