@@ -160,6 +160,12 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	if args.term < rf.currentTerm {
+		reply.term = rf.currentTerm
+		reply.voteGranted = false
+	} else if rf.votedFor == -1 {
+		// todo (need to create a func to check if a log is up-to-date when compared to another)
+	}
 }
 
 // example code to send a RequestVote RPC to a server.
