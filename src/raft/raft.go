@@ -76,19 +76,21 @@ type Raft struct {
 
 	// PERSISTENT STATE ON ALL SERVERS
 
-	currentTerm int      // latest term server has seen
-	votedFor    int      // candidateId that received vote in current term (or -1 if none)
-	LogEntry    []string // log entries, each entry contains command for state machine, and term when entry was received by leader (first index is 1)
+	currentTerm int        // latest term server has seen
+	votedFor    int        // candidateId that received vote in current term (or -1 if none)
+	logEntries  []LogEntry // log entries, each entry contains command for state machine, and term when entry was received by leader (first index is 1)
 
 	// VOLATILE STATE ON ALL SERVERS
 
 	commitIndex int // index of highest log entry known to be commited
 	lastApplied int // index of highest log entry applied to state machine
+	state       int // state of the server (follower, candidate or leader)
 
 	// VOLATILE STATE ON LEADERS
 
 	nextIndex  []int // for each server, index of the next log entry to send to that server
 	matchIndex []int // for each server, index of highest log entry known to be replicated on server
+
 }
 
 // return currentTerm and whether this server
@@ -169,6 +171,36 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+	if args.Term < rf.currentTerm {
+		return
+	}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+		rf.state = Follower
+	}
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		lastLogTerm := 0
+		if len(rf.logEntries) > 0 {
+			lastLogTerm = rf.logEntries[len(rf.logEntries)-1].term
+		}
+		if args.LastLogTerm > lastLogTerm {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+			return
+		}
+		if args.LastLogTerm == lastLogTerm && len(rf.logEntries) <= args.LastLogIndex {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+			return
+		}
+	}
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -249,7 +281,6 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
