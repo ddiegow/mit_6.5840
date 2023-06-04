@@ -85,6 +85,7 @@ type Raft struct {
 	commitIndex int // index of highest log entry known to be commited
 	lastApplied int // index of highest log entry applied to state machine
 	state       int // state of the server (follower, candidate or leader)
+	leaderId    int
 
 	// VOLATILE STATE ON LEADERS
 
@@ -275,11 +276,73 @@ func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
 }
+func (rf *Raft) heartBeat() {
 
+}
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
 		// Your code here (2A)
+		if rf.leaderId == -1 {
+
+			rf.state = Candidate
+			rf.currentTerm++
+			rf.votedFor = rf.me
+			lastLogTerm := 0
+			totalVotes := 1
+			votesFor := 1
+
+			if len(rf.logEntries) > 0 {
+				lastLogTerm = rf.logEntries[len(rf.logEntries)-1].term
+			}
+			args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: len(rf.logEntries) - 1, LastLogTerm: lastLogTerm}
+			voteChannel := make(chan bool)
+			for i := 0; i < len(rf.peers); i++ {
+				reply := RequestVoteReply{}
+
+				go func(i int) {
+					if i == rf.me {
+						return
+					}
+					ok := rf.sendRequestVote(i, &args, &reply)
+					if ok {
+						voteChannel <- reply.VoteGranted
+					} else {
+						voteChannel <- false
+					}
+				}(i)
+			}
+
+			for {
+				vote := <-voteChannel
+				totalVotes++
+				if vote {
+					votesFor++
+				}
+				if votesFor > len(rf.peers)/2 {
+					break
+				}
+				if totalVotes >= len(rf.peers) {
+					break
+				}
+			}
+
+			rf.mu.Lock()
+
+			if rf.state != Candidate {
+				rf.mu.Unlock()
+				return
+			}
+			rf.mu.Unlock()
+
+			if votesFor > len(rf.peers)/2 {
+				rf.mu.Lock()
+				rf.state = rf.leaderId
+				go rf.heartBeat()
+				rf.mu.Unlock()
+			}
+		}
+
 		// Check if a leader election should be started.
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
