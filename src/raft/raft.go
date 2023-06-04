@@ -19,10 +19,7 @@ package raft
 
 import (
 	//	"bytes"
-
-	"fmt"
 	"math/rand"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,11 +28,6 @@ import (
 	"6.5840/labrpc"
 )
 
-const (
-	STATE_FOLLOWER = iota
-	STATE_CANDIDATE
-	STATE_LEADER
-)
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -70,29 +62,15 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	// persistent on all servers
-	currentTerm int
-	votedFor    int
-	log         []string
-	// volatile on all servers
-	commitIndex int
-	lastApplied int
-	state       int
-	leaderUp    bool // is the leader still up?
-	lastLogTerm int
-	// volatile on leaders
-	nextIndex  []int
-	matchIndex []int
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+
 	var term int
 	var isleader bool
 	// Your code here (2A).
-	term = rf.currentTerm               // current term
-	isleader = rf.state == STATE_LEADER // is this
 	return term, isleader
 }
 
@@ -114,12 +92,12 @@ func (rf *Raft) persist() {
 	// rf.persister.Save(raftstate, nil)
 }
 
+
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-
 	// Your code here (2C).
 	// Example:
 	// r := bytes.NewBuffer(data)
@@ -135,6 +113,7 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
+
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
@@ -144,40 +123,22 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term         int // candidate's term
-	CandidateId  int // candidate requesting vote
-	LastLogIndex int // index of candidate's last log entry
-	LastLogTerm  int // term of candidate's last log entry
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term        int  // currentTerm, for candidate to update itself
-	VoteGranted bool // true means candidate received the vote
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	reply.Term = rf.currentTerm
-	//fmt.Println("args: LastLogTerm - LastLogIndex")
-	//fmt.Println(strconv.Itoa(args.LastLogTerm) + " - " + strconv.Itoa(args.LastLogIndex))
-	//fmt.Println("rf: votedFor - currentTerm - commitIndex")
-	//fmt.Println(strconv.Itoa(rf.me) + " - " +
-	//strconv.Itoa(rf.votedFor) + " - " + strconv.Itoa(rf.currentTerm) + " - " + strconv.Itoa(rf.commitIndex))
-	if args.Term < rf.currentTerm {
-		reply.VoteGranted = false
-	} else if rf.votedFor == -1 && args.LastLogTerm >= rf.currentTerm && args.LastLogIndex >= rf.commitIndex {
-		fmt.Println("Granting vote to " + strconv.Itoa(args.CandidateId))
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
-	}
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -212,6 +173,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -230,6 +192,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+
 
 	return index, term, isLeader
 }
@@ -258,39 +221,8 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-		votes := 0
-		if !rf.leaderUp { // leader isn't up, we need to start an election
-			rf.currentTerm++
-			votes++ // vote for myself
-			for i := 0; i < len(rf.peers); i++ {
-				args := RequestVoteArgs{
-					Term:         rf.currentTerm,
-					CandidateId:  rf.me,
-					LastLogIndex: rf.lastApplied,
-					LastLogTerm:  rf.lastLogTerm,
-				}
-				reply := RequestVoteReply{}
 
-				rf.sendRequestVote(i, &args, &reply)
-				if reply.Term > rf.currentTerm { // somebody else is the leader
-					rf.state = STATE_FOLLOWER
-					return
-				}
-				if reply.VoteGranted {
-					votes++
-				}
-			}
-			//fmt.Println("Votes: " + strconv.Itoa(votes))
-			if votes > len(rf.peers)/2 {
-				fmt.Println("I'm the leader!")
-				rf.state = STATE_LEADER
-				return
 
-			} else {
-				rf.currentTerm--
-			}
-
-		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
@@ -315,20 +247,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.state = STATE_FOLLOWER  // we start as a follower
-	rf.currentTerm = 0         // initialize to zero on first boot
-	rf.votedFor = -1           // we haven't voted for anybody
-	rf.log = make([]string, 0) // empty log
-	rf.commitIndex = 0         // we start at commit index 0
-	rf.lastApplied = 0         // we start at last applied 0
-	rf.lastLogTerm = 0
-	rf.nextIndex = nil  // we are a follower so no next index
-	rf.matchIndex = nil // we are a follower wso no match index
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+
 
 	return rf
 }
