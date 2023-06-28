@@ -19,7 +19,6 @@ package raft
 
 import (
 	"fmt"
-	//	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -172,7 +171,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 	if args.Term < rf.currentTerm {
@@ -311,14 +309,23 @@ func (rf *Raft) heartBeat() {
 		for i := range rf.peers {
 			rf.sendAppendEntries(i, &args, &reply)
 		}
-		ms := 10 + (rand.Int63() % 300)
+		ms := 120
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 
 }
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	// Check if a leader election should be started.
+	// pause for a random amount of time between 50 and 350
+	// milliseconds.
 
+	for rf.killed() == false {
+		ms := 50 + (rand.Int63() % 300)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		if rf.leaderId != -1 && rf.leaderId != rf.me {
+			rf.leaderId = -1
+			continue
+		}
 		// Your code here (2A)
 		if rf.leaderId == -1 {
 			rf.mu.Lock()
@@ -336,13 +343,12 @@ func (rf *Raft) ticker() {
 			args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: len(rf.logEntries) - 1, LastLogTerm: lastLogTerm}
 			voteChannel := make(chan bool)
 			for i := 0; i < len(rf.peers); i++ {
-
+				if i == rf.me {
+					continue
+				}
 				reply := RequestVoteReply{}
 
 				go func(i int) {
-					if i == rf.me {
-						return
-					}
 					ok := rf.sendRequestVote(i, &args, &reply)
 					if ok {
 						voteChannel <- reply.VoteGranted
@@ -381,13 +387,9 @@ func (rf *Raft) ticker() {
 				go rf.heartBeat()
 				rf.mu.Unlock()
 			}
+
 		}
 
-		// Check if a leader election should be started.
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
 
