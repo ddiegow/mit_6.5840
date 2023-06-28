@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -26,6 +25,10 @@ import (
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
+)
+
+var (
+	rafts []*Raft
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -98,6 +101,8 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.currentTerm, rf.leaderId == rf.me
 }
 
@@ -187,11 +192,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			lastLogTerm = rf.logEntries[len(rf.logEntries)-1].Term
 		}
 		if args.LastLogTerm > lastLogTerm {
+			//fmt.Printf("[%d] I'm voting for %d\n", rf.me, args.CandidateId)
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateId
 			return
 		}
 		if args.LastLogTerm == lastLogTerm && (len(rf.logEntries)-1) <= args.LastLogIndex {
+			//fmt.Printf("[%d] I'm voting for %d\n", rf.me, args.CandidateId)
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateId
 			return
@@ -253,7 +260,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// need to implement stuff in the future for appending entries
 
 	if args.Entries == nil {
+		rf.mu.Lock()
 		rf.leaderId = args.LeaderId
+		rf.state = Follower
+		rf.mu.Unlock()
 		reply.Success = true
 	}
 }
@@ -303,13 +313,13 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 func (rf *Raft) heartBeat() {
-	for {
+	for rf.killed() == false {
 		args := AppendEntriesArgs{Entries: nil, Term: rf.currentTerm, LeaderId: rf.me}
 		reply := AppendEntriesReply{}
 		for i := range rf.peers {
 			rf.sendAppendEntries(i, &args, &reply)
 		}
-		ms := 120
+		ms := 10 // this heartbeat rate must be much lower than the ticker rate so it will update the peer leader id before they enter a request-vote cycle
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 
@@ -320,26 +330,19 @@ func (rf *Raft) ticker() {
 	// milliseconds.
 
 	for rf.killed() == false {
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
-		if rf.leaderId != -1 && rf.leaderId != rf.me {
-			rf.leaderId = -1
-			continue
-		}
+		rf.mu.Lock()
 		// Your code here (2A)
 		if rf.leaderId == -1 {
-			rf.mu.Lock()
 			rf.state = Candidate
 			rf.currentTerm++
 			rf.votedFor = rf.me
-			rf.mu.Unlock()
 			lastLogTerm := 0
 			totalVotes := 1
 			votesFor := 1
-
 			if len(rf.logEntries) > 0 {
 				lastLogTerm = rf.logEntries[len(rf.logEntries)-1].Term
 			}
+			rf.mu.Unlock()
 			args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: len(rf.logEntries) - 1, LastLogTerm: lastLogTerm}
 			voteChannel := make(chan bool)
 			for i := 0; i < len(rf.peers); i++ {
@@ -364,32 +367,38 @@ func (rf *Raft) ticker() {
 				if vote {
 					votesFor++
 				}
-				if votesFor > len(rf.peers)/2 {
+				if totalVotes == len(rf.peers) {
 					break
 				}
-				if totalVotes >= len(rf.peers) {
-					break
-				}
+			}
+			if totalVotes == 1 {
+				continue
 			}
 			rf.mu.Lock()
-
 			if rf.state != Candidate {
 				rf.mu.Unlock()
-				return
+				continue
 			}
 			rf.mu.Unlock()
-			fmt.Printf("[%d] votesFor: %d. len(rf.peers)/2: %d\n", rf.me, votesFor, len(rf.peers)/2)
 			if votesFor > len(rf.peers)/2 {
-				fmt.Printf("[%d] I'm the leader!\n", rf.me)
+				//fmt.Printf("[%d] I'm the leader!\n", rf.me)
+				go rf.heartBeat()
 				rf.mu.Lock()
 				rf.state = Leader
 				rf.leaderId = rf.me
-				go rf.heartBeat()
 				rf.mu.Unlock()
 			}
 
+		} else {
+			rf.mu.Unlock()
 		}
-
+		rf.mu.Lock()
+		if rf.leaderId != rf.me {
+			rf.leaderId = -1
+		}
+		rf.mu.Unlock()
+		ms := 50 + (rand.Int63() % 300)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
 
@@ -419,9 +428,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
+	rf.dead = 0
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
+	rafts = append(rafts, rf)
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
