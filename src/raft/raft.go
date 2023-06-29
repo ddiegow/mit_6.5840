@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -74,6 +75,7 @@ type Raft struct {
 	// Internal tools
 	leaderChan chan int  // we will get the current leader id in this channel
 	startVote  chan bool // the timer will let this channel know if it's time or not to start a vote
+	timer      time.Timer
 }
 
 type LogEntry struct {
@@ -152,6 +154,8 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	VoteGranted bool
+	Term        int
 }
 
 // example RequestVote RPC handler.
@@ -237,21 +241,64 @@ func (rf *Raft) startVotingTimer() {
 }
 func (rf *Raft) startVotingProcess() {
 	// start the voting process
+	totalVotes := 1
+	votesReceived := 1
+	getVotes := make(chan bool)
+	args := RequestVoteArgs{}
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		reply := RequestVoteReply{}
+		ok := rf.sendRequestVote(i, &args, &reply)
+		if !ok {
+			getVotes <- false
+			continue
+		}
+		if reply.VoteGranted {
+			getVotes <- true
+		} else {
+			getVotes <- false
+		}
+	}
+	for {
+		vote := <-getVotes
+		if vote {
+			votesReceived++
+		}
+		totalVotes++
+		if votesReceived > len(rf.peers)/2 {
+			break
+		}
+		if totalVotes == len(rf.peers) {
+			break
+		}
+
+	}
+
 }
 func (rf *Raft) manageState() {
 	for {
 		select {
-		case leaderId := <-rf.leaderChan:
-			rf.mu.Lock()
-			rf.leaderId = leaderId
-			rf.startVotingTimer()
-		case startVote := <-rf.startVote:
-			if startVote {
-				rf.startVotingProcess()
-			} else {
-				rf.startVotingTimer()
+		case leaderId := <-rf.leaderChan: // if we get the leader id
+			rf.mu.Lock()           // lock the raft
+			rf.leaderId = leaderId // update the leader
+			rf.mu.Unlock()
+		case startVote := <-rf.startVote: // if we get a signal to start the voting process
+			if startVote { // not really necessary as we always pass true, but just in case
+				rf.startVotingProcess() // start it
 			}
+		case timerVal := <-rf.timer.C:
+			fmt.Println(timerVal)
+			rf.mu.Lock()
+			if rf.leaderId == -1 && !rf.killed() {
+				rf.startVote <- true
+			} else {
+				rf.timer = *time.NewTimer(time.Duration(50+(rand.Int63()%300)) * time.Millisecond)
+			}
+			rf.mu.Unlock()
 		}
+
 	}
 }
 func (rf *Raft) ticker() {
@@ -291,7 +338,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
-
+	rf.leaderChan = make(chan int)
+	rf.startVote = make(chan bool)
+	rf.timer = *time.NewTimer(time.Duration(50+(rand.Int63()%300)) * time.Millisecond)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
