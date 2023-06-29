@@ -64,12 +64,16 @@ type Raft struct {
 	currentTerm int        // latest term server has seen
 	votedFor    int        // candidateId that received vote in current term (or -1 if none)
 	log         []LogEntry // log entries
+	leaderId    int        // current leader's id (-1 if unknown)
 	// Volatile state on all servers
 	commitIndex int // index of highest log entry known to be committed
 	lastApplied int // index of highest log entry applied to state machine
 	// Volatile state on leaders
 	nextIndex  []int // for each server, index of the next log entry to send to that server
 	matchIndex []int // for each server, index of highest log entry known to be replicated on server
+	// Internal tools
+	leaderChan chan int  // we will get the current leader id in this channel
+	startVote  chan bool // the timer will let this channel know if it's time or not to start a vote
 }
 
 type LogEntry struct {
@@ -84,6 +88,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = rf.currentTerm
+	isleader = rf.leaderId == rf.me
 	return term, isleader
 }
 
@@ -223,7 +231,29 @@ func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
 }
-
+func (rf *Raft) startVotingTimer() {
+	// start the voting timer which will check if there is a leader or not and send the
+	// appropriate message to the startVote channel
+}
+func (rf *Raft) startVotingProcess() {
+	// start the voting process
+}
+func (rf *Raft) manageState() {
+	for {
+		select {
+		case leaderId := <-rf.leaderChan:
+			rf.mu.Lock()
+			rf.leaderId = leaderId
+			rf.startVotingTimer()
+		case startVote := <-rf.startVote:
+			if startVote {
+				rf.startVotingProcess()
+			} else {
+				rf.startVotingTimer()
+			}
+		}
+	}
+}
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
