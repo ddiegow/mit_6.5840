@@ -1,6 +1,6 @@
 package raft
 
-//TODO: add state to raft and use it to update state when voting, becoming leader, and so on. AND also when the requestVote reply term is higher than ours, to become follower
+//TODO: fix the fact that when a server returns to life it maintains its previous state, including that of a leader (it should restart as a follower)
 //
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -28,6 +28,12 @@ import (
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
+)
+
+const (
+	FOLLOWER  = 1
+	CANDIDATE = 2
+	LEADER    = 3
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -78,6 +84,8 @@ type Raft struct {
 	startVoteChan chan bool // the timer will let this channel know if it's time or not to start a vote
 	heartBeatChan chan bool
 	stateTimer    *time.Timer
+	state         int
+	died          bool
 }
 type LogEntry struct {
 	Command string
@@ -94,7 +102,7 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	term = rf.currentTerm
-	isleader = rf.leaderId == rf.me
+	isleader = rf.state == LEADER
 	return term, isleader
 }
 
@@ -168,9 +176,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// Your code here (2A, 2B).
-
+	reply.VoteGranted = false
 	if args.Term < rf.currentTerm {
-		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
 	}
@@ -181,7 +188,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		lastLogTerm = rf.log[lastLogIndex].Term
 	}
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && args.LastLogIndex >= lastLogIndex && args.LastLogTerm >= lastLogTerm {
-		fmt.Printf("[%d] Voting for [%d]\n", rf.me, args.CandidateId)
+		//fmt.Printf("[%d] Voting for [%d]\n", rf.me, args.CandidateId)
 		reply.VoteGranted = true
 		rf.currentTerm = args.Term
 		reply.Term = rf.currentTerm
@@ -241,10 +248,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
+	if rf.killed() {
+		reply.Success = false
+		return
+	}
+	// There's some kind of problem here. The leader also receives the heartbeat
 	if args.Entries == nil {
 		reply.Success = true
+		rf.votedFor = -1
 		rf.leaderId = args.LeaderId
-		return
 	}
 }
 
@@ -294,11 +306,11 @@ func (rf *Raft) killed() bool {
 }
 func (rf *Raft) startVotingProcess() {
 	// start the voting process
-	fmt.Printf("[%d] Starting voting process\n", rf.me)
 	totalVotes := 1
 	votesReceived := 1
 	getVotes := make(chan bool)
 	rf.mu.Lock() // maybe not necessary, just in case (too sleepy to calculate it :P)
+	rf.state = CANDIDATE
 	rf.currentTerm++
 	lastLogIndex := 0
 	lastLogTerm := 0
@@ -308,24 +320,23 @@ func (rf *Raft) startVotingProcess() {
 	}
 	rf.mu.Unlock()
 	args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm}
-	fmt.Printf("[%d] Sending out vote requests\n", rf.me)
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
 		}
+		//fmt.Printf("[%d] Sending out vote request to %d\n", rf.me, i)
 		go func(index int) {
 			reply := RequestVoteReply{}
 			ok := rf.sendRequestVote(index, &args, &reply)
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm { // we got a reply with a higher term than ours
-				rf.stateTimer.Reset(time.Duration(50+(rand.Int63()%300)) * time.Millisecond) // reset the state timer
-				rf.mu.Unlock()
-				return // stop counting votes
+				rf.state = FOLLOWER
 			}
 			rf.mu.Unlock()
 			if !ok {
-				return
-			} else if reply.VoteGranted {
+				getVotes <- false // this gives an extra count for the offline servers
+			}
+			if reply.VoteGranted {
 				getVotes <- true
 			} else {
 				getVotes <- false
@@ -334,26 +345,21 @@ func (rf *Raft) startVotingProcess() {
 
 	}
 	for {
-		rf.mu.Lock()
-		if rf.leaderId != -1 {
-			rf.mu.Unlock()
-			return
-		}
-		rf.mu.Unlock()
 		vote := <-getVotes
+
 		if vote {
 			votesReceived++
 		}
 		totalVotes++
-		//fmt.Printf("Total votes: %d. Votes received: %d\n", totalVotes, votesReceived)
-
 		if totalVotes == len(rf.peers) {
 			break
 		}
 	}
 	rf.mu.Lock()
 	fmt.Printf("[%d] Received %d votes out of %d\n", rf.me, votesReceived, totalVotes)
-	if votesReceived > totalVotes/2 {
+	if votesReceived > totalVotes/2 && rf.state == CANDIDATE && rf.leaderId == -1 {
+		fmt.Printf("[%d] I am the leader!\n", rf.me)
+		rf.state = LEADER
 		rf.leaderId = rf.me
 		rf.heartBeatChan <- true
 	}
@@ -363,9 +369,19 @@ func (rf *Raft) startVotingProcess() {
 }
 func (rf *Raft) broadcastHeartBeat() {
 	args := AppendEntriesArgs{Entries: nil, LeaderId: rf.me}
+	totalResponses := 0
 	for i := range rf.peers {
 		reply := AppendEntriesReply{}
 		rf.sendAppendEntries(i, &args, &reply)
+		if reply.Success {
+			totalResponses++
+		}
+	}
+	if totalResponses == 1 {
+		rf.mu.Lock()
+		rf.state = FOLLOWER
+		rf.leaderId = -1
+		rf.mu.Unlock()
 	}
 }
 func (rf *Raft) manageState() {
@@ -381,6 +397,12 @@ func (rf *Raft) manageState() {
 			}
 		case _ = <-rf.heartBeatChan:
 			for !rf.killed() {
+				rf.mu.Lock()
+				if rf.state != LEADER {
+					rf.mu.Unlock()
+					break
+				}
+				rf.mu.Unlock()
 				rf.broadcastHeartBeat()
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -440,6 +462,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.leaderChan = make(chan int)
 	rf.startVoteChan = make(chan bool)
 	rf.heartBeatChan = make(chan bool)
+	rf.state = FOLLOWER
 	rf.mu.Lock()
 	rf.stateTimer = time.NewTimer(time.Duration(50+(rand.Int63()%300)) * time.Millisecond)
 	rf.mu.Unlock()
