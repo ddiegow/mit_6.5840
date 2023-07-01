@@ -1,5 +1,6 @@
 package raft
 
+// TODO: need to work on what happens to leader when no responses are received
 //
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -253,6 +254,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) startVote() {
+	if rf.verbose {
+		fmt.Printf("[%d] Starting vote [%d]\n", time.Now().UnixMilli(), rf.me)
+	}
 	totalVotes := 1    // we initially counted one vote
 	receivedVotes := 1 // voted for self
 	rf.mu.Lock()
@@ -298,7 +302,7 @@ func (rf *Raft) startVote() {
 		rf.mu.Lock()
 		if rf.state != CANDIDATE { // if we're not a candidate anymore
 			if rf.verbose {
-				fmt.Printf("[%d] Not candidate anymore! Leaving voting routine [%d]\n", rf.me, time.Now().Nanosecond())
+				fmt.Printf("[%d] Not candidate anymore! Leaving voting routine [%d]\n", time.Now().UnixMilli(), rf.me)
 			}
 			rf.votedFor = -1 // reset the vote
 			rf.mu.Unlock()
@@ -325,7 +329,7 @@ func (rf *Raft) startVote() {
 	}
 	// finished counting
 	if rf.verbose {
-		fmt.Printf("[%d] Got %d out of %d votes! [%d]\n", rf.me, receivedVotes, totalVotes, time.Now().Nanosecond())
+		fmt.Printf("[%d] Got %d out of %d votes! [%d]\n", time.Now().UnixMilli(), receivedVotes, totalVotes, rf.me)
 	}
 	rf.mu.Lock()
 	if rf.state != CANDIDATE { // same as before
@@ -346,7 +350,7 @@ func (rf *Raft) startVote() {
 
 func (rf *Raft) hbManager() {
 	if rf.verbose {
-		fmt.Printf("[%d] Heartbeat started [%d]\n", rf.me, time.Now().Nanosecond())
+		fmt.Printf("[%d] Heartbeat started [%d]\n", time.Now().UnixMilli(), rf.me)
 	}
 	for !rf.killed() {
 		_ = <-rf.hbTicker.C
@@ -354,7 +358,7 @@ func (rf *Raft) hbManager() {
 		rf.mu.Lock()
 		if rf.state != LEADER { // check if we're not the leader
 			if rf.verbose {
-				fmt.Printf("[%d] Stopping heartbeat [%d]\n", rf.me, time.Now().Nanosecond())
+				fmt.Printf("[%d] Stopping heartbeat [%d]\n", time.Now().UnixMilli(), rf.me)
 			}
 			rf.hbTicker.Stop()
 			rf.mu.Unlock()
@@ -397,7 +401,7 @@ func (rf *Raft) manageState() {
 	for !rf.killed() {
 		_ = <-rf.voteTimer.C
 		if rf.verbose {
-			fmt.Printf("[%d] Time to call a vote! [%d]\n", rf.me, time.Now().Nanosecond())
+			//fmt.Printf("[%d] Time to call a vote! [%d]\n", time.Now().Nanosecond(),  rf.me)
 		}
 		rf.startVote()
 
