@@ -19,7 +19,6 @@ package raft
 //
 
 import (
-	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -181,6 +180,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = rf.currentTerm
 		return
 	}
+	if args.Term > rf.currentTerm {
+		rf.state = FOLLOWER
+	}
 	lastLogIndex := 0
 	lastLogTerm := 0
 	if len(rf.log) > 0 {
@@ -247,13 +249,15 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply.Term = rf.currentTerm
-	if rf.killed() {
-		reply.Success = false
-		return
+	if args.Term > rf.currentTerm {
+		rf.state = FOLLOWER
 	}
+	reply.Term = rf.currentTerm
 	// There's some kind of problem here. The leader also receives the heartbeat
-	if args.Entries == nil {
+	if args.Entries == nil { // if we get a heartbeat
+		if rf.state != LEADER {
+			rf.state = FOLLOWER
+		}
 		reply.Success = true
 		rf.votedFor = -1
 		rf.leaderId = args.LeaderId
@@ -356,9 +360,9 @@ func (rf *Raft) startVotingProcess() {
 		}
 	}
 	rf.mu.Lock()
-	fmt.Printf("[%d] Received %d votes out of %d\n", rf.me, votesReceived, totalVotes)
+	//fmt.Printf("[%d] Received %d votes out of %d\n", rf.me, votesReceived, totalVotes)
 	if votesReceived > totalVotes/2 && rf.state == CANDIDATE && rf.leaderId == -1 {
-		fmt.Printf("[%d] I am the leader!\n", rf.me)
+		//fmt.Printf("[%d] I am the leader!\n", rf.me)
 		rf.state = LEADER
 		rf.leaderId = rf.me
 		rf.heartBeatChan <- true
@@ -376,11 +380,18 @@ func (rf *Raft) broadcastHeartBeat() {
 		if reply.Success {
 			totalResponses++
 		}
-	}
-	if totalResponses == 1 {
 		rf.mu.Lock()
-		rf.state = FOLLOWER
-		rf.leaderId = -1
+		if reply.Term > rf.currentTerm { // if somebody else has a higher term, we're not leader anymore
+			rf.state = FOLLOWER // go back to being a follower
+			rf.mu.Unlock()
+			return // stop broadcasting
+		}
+		rf.mu.Unlock()
+	}
+	if totalResponses == 1 { // if we only got one response it means we are alone
+		rf.mu.Lock()
+		rf.state = FOLLOWER // become a follower again
+		rf.leaderId = -1    // there is no leader
 		rf.mu.Unlock()
 	}
 }
