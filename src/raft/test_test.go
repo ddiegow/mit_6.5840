@@ -100,6 +100,7 @@ func TestManyElections2A(t *testing.T) {
 
 	iters := 10
 	for ii := 1; ii < iters; ii++ {
+		fmt.Printf("Iteration %d\n", ii)
 		// disconnect three nodes
 		i1 := rand.Int() % servers
 		i2 := rand.Int() % servers

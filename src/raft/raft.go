@@ -19,6 +19,7 @@ package raft
 //
 
 import (
+	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -309,11 +310,15 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 func (rf *Raft) startVotingProcess() {
+	rf.mu.Lock()
+	if rf.leaderId != -1 {
+		rf.mu.Unlock()
+		return
+	}
 	// start the voting process
 	totalVotes := 1
 	votesReceived := 1
 	getVotes := make(chan bool)
-	rf.mu.Lock() // maybe not necessary, just in case (too sleepy to calculate it :P)
 	rf.state = CANDIDATE
 	rf.currentTerm++
 	lastLogIndex := 0
@@ -360,9 +365,9 @@ func (rf *Raft) startVotingProcess() {
 		}
 	}
 	rf.mu.Lock()
-	//fmt.Printf("[%d] Received %d votes out of %d\n", rf.me, votesReceived, totalVotes)
-	if votesReceived > totalVotes/2 && rf.state == CANDIDATE && rf.leaderId == -1 {
-		//fmt.Printf("[%d] I am the leader!\n", rf.me)
+	fmt.Printf("[%d] Received %d votes out of %d. leaderId: %d. state: %d\n", rf.me, votesReceived, totalVotes, rf.leaderId, rf.state)
+	if votesReceived > totalVotes/2 && rf.state == CANDIDATE && rf.leaderId != -1 {
+		fmt.Printf("[%d] I am the leader!\n", rf.me)
 		rf.state = LEADER
 		rf.leaderId = rf.me
 		rf.heartBeatChan <- true
