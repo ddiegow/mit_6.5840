@@ -253,11 +253,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm {
 		return
 	}
-	if args.Term > rf.currentTerm {
-		rf.state = FOLLOWER
-		rf.currentTerm = args.Term
-		rf.votedFor = -1
-	}
+	//if args.Term > rf.currentTerm {
+	rf.state = FOLLOWER
+	rf.currentTerm = args.Term
+	rf.votedFor = -1
+	//}
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -326,6 +326,9 @@ func (rf *Raft) manageState() {
 			rf.mu.Unlock()
 
 			for i := 0; i < len(rf.peers); i++ {
+				if i == rf.me { // don't send myself a request
+					continue
+				}
 				go func(index int) {
 					reply := RequestVoteReply{}
 					ok := rf.sendRequestVote(index, &args, &reply)
@@ -402,7 +405,7 @@ func (rf *Raft) manageState() {
 						}()
 					}(i)
 				}
-				time.Sleep(time.Duration(20) * time.Millisecond)
+				time.Sleep(time.Duration(10) * time.Millisecond)
 			}
 		}
 	}
