@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -93,6 +92,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = rf.currentTerm
+	isleader = rf.state == LEADER
 	return term, isleader
 }
 
@@ -187,7 +190,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && args.LastLogIndex >= lastLogIndex && args.LastLogTerm >= lastLogTerm {
-		fmt.Println("Granting vote")
 		reply.VoteGranted = true
 		return
 	}
@@ -222,6 +224,44 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+type AppendEntriesArgs struct {
+	// Your data here (2A, 2B).
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	// Your data here (2A).
+	Term    int
+	Success bool
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
+	reply.Term = rf.currentTerm
+	reply.Success = false
+	if args.Term < rf.currentTerm {
+		return
+	}
+	if args.Term > rf.currentTerm {
+		rf.state = FOLLOWER
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+	}
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -272,9 +312,10 @@ func (rf *Raft) manageState() {
 		case _ = <-rf.electionTimeout.C:
 			rf.mu.Lock()
 			rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // reset the election timeout
-			rf.votedFor = rf.me                                                                 // vote for self
-			rf.state = CANDIDATE                                                                // become a candidate
-			receivedVotes := 1                                                                  // votes I've received, starts with one because voted for self
+			rf.currentTerm++
+			rf.votedFor = rf.me  // vote for self
+			rf.state = CANDIDATE // become a candidate
+			receivedVotes := 1   // votes I've received, starts with one because voted for self
 			lastLogIndex := 0
 			lastLogTerm := 0
 			if len(rf.log) > 0 {
@@ -323,7 +364,45 @@ func (rf *Raft) manageState() {
 			rf.mu.Unlock()
 			for {
 				rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // reset our election timer
-
+				rf.mu.Lock()
+				if rf.state != LEADER {
+					rf.mu.Unlock()
+					break
+				}
+				rf.mu.Unlock()
+				args := AppendEntriesArgs{Term: rf.currentTerm}
+				checkReply := make(chan bool)
+				for i := 0; i < len(rf.peers); i++ {
+					if i == rf.me {
+						continue
+					}
+					go func(index int) {
+						reply := AppendEntriesReply{}
+						ok := rf.sendAppendEntries(index, &args, &reply)
+						if ok {
+							checkReply <- true
+						}
+						rf.mu.Lock()
+						if reply.Term > rf.currentTerm {
+							rf.state = FOLLOWER
+							rf.currentTerm = reply.Term
+							rf.votedFor = -1
+						}
+						rf.mu.Unlock()
+						go func() { // check for server timeout
+							select {
+							case _ = <-checkReply: // if we got a reply, we will get something through this channel
+								return
+							case <-time.After(time.Duration(500) * time.Millisecond): // if we don't get a reply this timer will activate and reset server to follower
+								rf.mu.Lock()
+								rf.state = FOLLOWER
+								rf.votedFor = -1
+								rf.mu.Unlock()
+							}
+						}()
+					}(i)
+				}
+				time.Sleep(time.Duration(20) * time.Millisecond)
 			}
 		}
 	}
