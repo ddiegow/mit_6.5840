@@ -83,6 +83,7 @@ type Raft struct {
 	electionTimeout *time.Timer
 	voteChan        chan bool
 	leaderChan      chan bool
+	checkReply      chan bool
 }
 
 // return currentTerm and whether this server
@@ -309,7 +310,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) manageState() {
 	for !rf.killed() {
 		select {
-		case _ = <-rf.electionTimeout.C:
+		case <-rf.electionTimeout.C:
 			rf.mu.Lock()
 			rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // reset the election timeout
 			rf.currentTerm++
@@ -353,18 +354,17 @@ func (rf *Raft) manageState() {
 					receivedVotes++
 				}
 				if receivedVotes > len(rf.peers)/2 { // we have the majority vote
-
+					rf.mu.Lock()
+					rf.state = LEADER
+					rf.mu.Unlock()
 					go func() {
 						rf.leaderChan <- true
 					}()
 					break
 				}
 			}
-		case _ = <-rf.leaderChan: // become the leader
-			rf.mu.Lock()
-			rf.state = LEADER
-			rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
-			rf.mu.Unlock()
+		case <-rf.leaderChan: // become the leader
+			go rf.checkTimeout()
 			for {
 				rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // reset our election timer
 				rf.mu.Lock()
@@ -374,7 +374,6 @@ func (rf *Raft) manageState() {
 				}
 				rf.mu.Unlock()
 				args := AppendEntriesArgs{Term: rf.currentTerm}
-				checkReply := make(chan bool)
 				for i := 0; i < len(rf.peers); i++ {
 					if i == rf.me {
 						continue
@@ -383,7 +382,7 @@ func (rf *Raft) manageState() {
 						reply := AppendEntriesReply{}
 						ok := rf.sendAppendEntries(index, &args, &reply)
 						if ok {
-							checkReply <- true
+							rf.checkReply <- true
 						}
 						rf.mu.Lock()
 						if reply.Term > rf.currentTerm {
@@ -392,21 +391,22 @@ func (rf *Raft) manageState() {
 							rf.votedFor = -1
 						}
 						rf.mu.Unlock()
-						go func() { // check for server timeout
-							select {
-							case _ = <-checkReply: // if we got a reply, we will get something through this channel
-								return
-							case <-time.After(time.Duration(500) * time.Millisecond): // if we don't get a reply this timer will activate and reset server to follower
-								rf.mu.Lock()
-								rf.state = FOLLOWER
-								rf.votedFor = -1
-								rf.mu.Unlock()
-							}
-						}()
 					}(i)
 				}
 				time.Sleep(time.Duration(10) * time.Millisecond)
 			}
+		}
+	}
+}
+func (rf *Raft) checkTimeout() {
+	for !rf.killed() {
+		select {
+		case _ = <-rf.checkReply: // if we got a reply, we will get something through this channel
+		case <-time.After(time.Duration(500) * time.Millisecond): // if we don't get a reply this timer will activate and reset server to follower
+			rf.mu.Lock()
+			rf.state = FOLLOWER
+			rf.votedFor = -1
+			rf.mu.Unlock()
 		}
 	}
 }
@@ -442,6 +442,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.electionTimeout = time.NewTimer(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
 	rf.voteChan = make(chan bool)
 	rf.leaderChan = make(chan bool)
+	rf.checkReply = make(chan bool)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
