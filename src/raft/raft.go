@@ -306,8 +306,7 @@ func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
 }
-
-func (rf *Raft) manageState() {
+func (rf *Raft) checkElection() {
 	for !rf.killed() {
 		select {
 		case <-rf.electionTimeout.C:
@@ -363,41 +362,46 @@ func (rf *Raft) manageState() {
 					break
 				}
 			}
-		case <-rf.leaderChan: // become the leader
-			go rf.checkTimeout()
-			for {
-				rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // reset our election timer
-				rf.mu.Lock()
-				if rf.state != LEADER {
-					rf.mu.Unlock()
-					break
-				}
-				rf.mu.Unlock()
-				args := AppendEntriesArgs{Term: rf.currentTerm}
-				for i := 0; i < len(rf.peers); i++ {
-					if i == rf.me {
-						continue
-					}
-					go func(index int) {
-						reply := AppendEntriesReply{}
-						ok := rf.sendAppendEntries(index, &args, &reply)
-						if ok {
-							rf.checkReply <- true
-						}
-						rf.mu.Lock()
-						if reply.Term > rf.currentTerm {
-							rf.state = FOLLOWER
-							rf.currentTerm = reply.Term
-							rf.votedFor = -1
-						}
-						rf.mu.Unlock()
-					}(i)
-				}
-				time.Sleep(time.Duration(10) * time.Millisecond)
-			}
 		}
 	}
 }
+func (rf *Raft) checkLeader() {
+	for !rf.killed() {
+		<-rf.leaderChan // become the leader
+		go rf.checkTimeout()
+		for {
+			rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // reset our election timer
+			rf.mu.Lock()
+			if rf.state != LEADER {
+				rf.mu.Unlock()
+				break
+			}
+			rf.mu.Unlock()
+			args := AppendEntriesArgs{Term: rf.currentTerm}
+			for i := 0; i < len(rf.peers); i++ {
+				if i == rf.me {
+					continue
+				}
+				go func(index int) {
+					reply := AppendEntriesReply{}
+					ok := rf.sendAppendEntries(index, &args, &reply)
+					if ok {
+						rf.checkReply <- true
+					}
+					rf.mu.Lock()
+					if reply.Term > rf.currentTerm {
+						rf.state = FOLLOWER
+						rf.currentTerm = reply.Term
+						rf.votedFor = -1
+					}
+					rf.mu.Unlock()
+				}(i)
+			}
+			time.Sleep(time.Duration(10) * time.Millisecond)
+		}
+	}
+}
+
 func (rf *Raft) checkTimeout() {
 	for !rf.killed() {
 		select {
@@ -439,7 +443,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, 0)
 	rf.nextIndex = make([]int, 0)
 	rf.lastApplied = 0
-	rf.electionTimeout = time.NewTimer(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
+
 	rf.voteChan = make(chan bool)
 	rf.leaderChan = make(chan bool)
 	rf.checkReply = make(chan bool)
@@ -447,6 +451,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	go rf.manageState()
+	//go rf.manageState()
+	rf.electionTimeout = time.NewTimer(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
+	go rf.checkElection()
+	go rf.checkLeader()
 	return rf
 }
