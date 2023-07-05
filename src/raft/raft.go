@@ -255,10 +255,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	//if args.Term > rf.currentTerm {
-	rf.state = FOLLOWER
-	rf.currentTerm = args.Term
-	rf.votedFor = -1
+	if len(args.Entries) == 0 { // it's a heartbeat
+		rf.state = FOLLOWER
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+		reply.Success = true
+		return
+	}
+
 	//}
+
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -279,12 +285,38 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	index := len(rf.log) - 1
+	term := rf.currentTerm
+	isLeader := rf.state == LEADER
+	rf.mu.Unlock()
+	if isLeader {
+		logEntry := LogEntry{Term: term, Command: command}
+		rf.log = append(rf.log, logEntry)
+		args := AppendEntriesArgs{Term: term, LeaderId: rf.me, LeaderCommit: rf.commitIndex, PrevLogIndex: index, Entries: []LogEntry{logEntry}}
+		index++                              // increment the index so that it reflects that we just appended an entry
+		for i := 0; i < len(rf.peers); i++ { // for each of the peers
+			if i == rf.me { // except myself
+				continue
+			}
+			reply := AppendEntriesReply{} // reply will come here
 
-	// Your code here (2B).
+			go func(j int) {
+				ok := false
+				for !ok && rf.state == LEADER { // might need to change this, as rf isn't locked when state is checked
+					ok = rf.sendAppendEntries(j, &args, &reply)
+					time.Sleep(time.Duration(10) * time.Millisecond)
+				}
+				rf.mu.Lock()
+				if reply.Term > rf.currentTerm { // if the reply contains a higher term, we are not the leader anymore
+					rf.state = FOLLOWER
+					rf.votedFor = -1
+				}
+				rf.mu.Unlock()
+			}(i)
 
+		}
+	}
 	return index, term, isLeader
 }
 
