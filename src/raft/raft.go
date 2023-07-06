@@ -182,8 +182,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 	}
 
-	lastLogIndex := 0
-	lastLogTerm := 0
+	lastLogIndex := -1 // -1 indicates empty log
+	lastLogTerm := -1
 
 	if len(rf.log) > 0 {
 		lastLogIndex = len(rf.log) - 1
@@ -248,14 +248,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
+	rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond) // restart the election timeout timer
 	reply.Term = rf.currentTerm
 	reply.Success = false
 	if args.Term < rf.currentTerm {
 		return
-	}
+	} // if the leader's term is lower than ours, it can't be the leader, so respond false
 	//if args.Term > rf.currentTerm {
-	if len(args.Entries) == 0 { // it's a heartbeat
+	if len(args.Entries) == 0 { // there are no entries, so it's a heartbeat
 		rf.state = FOLLOWER
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
@@ -291,31 +291,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.state == LEADER
 	rf.mu.Unlock()
 	if isLeader {
-		logEntry := LogEntry{Term: term, Command: command}
-		rf.log = append(rf.log, logEntry)
-		args := AppendEntriesArgs{Term: term, LeaderId: rf.me, LeaderCommit: rf.commitIndex, PrevLogIndex: index, Entries: []LogEntry{logEntry}}
-		index++                              // increment the index so that it reflects that we just appended an entry
-		for i := 0; i < len(rf.peers); i++ { // for each of the peers
-			if i == rf.me { // except myself
-				continue
-			}
-			reply := AppendEntriesReply{} // reply will come here
-
-			go func(j int) {
-				ok := false
-				for !ok && rf.state == LEADER { // might need to change this, as rf isn't locked when state is checked
-					ok = rf.sendAppendEntries(j, &args, &reply)
-					time.Sleep(time.Duration(10) * time.Millisecond)
-				}
-				rf.mu.Lock()
-				if reply.Term > rf.currentTerm { // if the reply contains a higher term, we are not the leader anymore
-					rf.state = FOLLOWER
-					rf.votedFor = -1
-				}
-				rf.mu.Unlock()
-			}(i)
-
-		}
+		// send append entry to each follower. if we get a false response, check the term to see if we
+		// shouldn't be the leader anymore. If not the case, go back one index on our log and resend
+		// until we get a positive response. We will get one eventually, even if the whole follower
+		// log needs to be changed
 	}
 	return index, term, isLeader
 }
@@ -348,8 +327,8 @@ func (rf *Raft) checkElection() {
 			rf.votedFor = rf.me  // vote for self
 			rf.state = CANDIDATE // become a candidate
 			receivedVotes := 1   // votes I've received, starts with one because voted for self
-			lastLogIndex := 0
-			lastLogTerm := 0
+			lastLogIndex := -1
+			lastLogTerm := -1
 			if len(rf.log) > 0 {
 				lastLogIndex = len(rf.log) - 1
 				lastLogTerm = rf.log[lastLogIndex].Term
