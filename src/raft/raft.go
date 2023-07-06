@@ -188,6 +188,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// that received the vote request
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && (args.LastLogTerm > lastLogTerm || (lastLogTerm == args.LastLogTerm && args.LastLogIndex >= lastLogIndex)) {
 		reply.VoteGranted = true
+		rf.electionTimeout.Reset(time.Duration(rf.getElectionTimeout()) * time.Millisecond)
 		return
 	}
 }
