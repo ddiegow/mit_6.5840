@@ -201,10 +201,10 @@ type AppendEntriesArgs struct {
 	// Your data here (2A, 2B).
 	Term         int
 	LeaderId     int
-	PrevLogIndex int
-	PrevLogTerm  int
-	Entries      []LogEntry
-	LeaderCommit int
+	PrevLogIndex int        // the index before the one we want to append the command at
+	PrevLogTerm  int        // the term at prevLogIndex
+	Entries      []LogEntry // the list of entries we want to append (will increase as we go further back in the log)
+	LeaderCommit int        // the leader's commit index
 }
 
 type AppendEntriesReply struct {
@@ -223,16 +223,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm {
 		return
 	} // if the leader's term is lower than ours, it can't be the leader, so respond false
-	//if args.Term > rf.currentTerm {
-	if len(args.Entries) == 0 { // there are no entries, so it's a heartbeat
-		rf.state = FOLLOWER
-		rf.currentTerm = args.Term
-		rf.votedFor = -1
-		reply.Success = true
-		return
-	}
 
-	//}
+	rf.currentTerm = args.Term // update our term
+	rf.votedFor = -1           // we are not in the voting process so no need for a value
+	rf.state = FOLLOWER        // become a follower
+
+	if len(args.Entries) == 0 { // there are no entries, so it's a heartbeat
+		reply.Success = true // everything went well
+		return               // nothing to append, so we return
+	}
+	// if we arrive here, the log has entries, so we have to manage it
+	// if
 
 }
 
